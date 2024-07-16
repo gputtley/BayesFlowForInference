@@ -64,6 +64,8 @@ class Network():
     self.optimizer_name = "Adam" 
     self.lr_scheduler_name = "ExponentialDecay"
     self.lr_scheduler_options = {} 
+    self.num_coupling_layers = 15
+    self.reg_val = 0.01
 
     # Running parameters
     self.plot_loss = True
@@ -103,7 +105,9 @@ class Network():
         options (dict): Dictionary of options to set.
     """
     for key, value in options.items():
-      setattr(self, key, value)
+      if hasattr(self, key)==False: # True if the specified object has the specified attribute, otherwise False.
+        raise AttributeError(f"the model has no attribution '{key}'") 
+      setattr(self, key, value) # sets the value of the specified attribute of the specified object
 
   def BuildModel(self):
     """
@@ -146,7 +150,7 @@ class Network():
       }
     elif self.coupling_design == "spline":
       settings = spline_settings
-    elif self.coupling_desing == "affine":
+    elif self.coupling_design == "affine":
       settings = affine_settings
 
     self.inference_net = bf.networks.InvertibleNetwork(
@@ -157,7 +161,7 @@ class Network():
       coupling_settings=settings
       )
 
-    self.amortizer = bf.amortizers.AmortizedPosterior(self.inference_net)
+    self.amortizer = bf.amortizers.AmortizedPosterior(self.inference_net, self.reg_val)
 
   def BuildTrainer(self):
     """
@@ -425,6 +429,7 @@ class Network():
       pp = PreProcess()
       pp.parameters = self.data_parameters
       X_untransformed = copy.deepcopy(X)
+
       X = pp.TransformData(pd.DataFrame(X, columns=self.X_train.columns)).to_numpy()
       Y = pp.TransformData(pd.DataFrame(Y, columns=self.Y_train.columns)).to_numpy()
       data = {
@@ -559,7 +564,7 @@ class Network():
       Y = self.Y_test.LoadFullDataset()
       x1 = self.X_test.LoadFullDataset()
       wt1 = self.wt_test.LoadFullDataset()
-
+    
     x1 = np.hstack((x1, Y))
     y1 = np.zeros(len(x1)).reshape(-1,1)
     wt1 = wt1.to_numpy()

@@ -32,7 +32,7 @@ class PreProcess():
     self.X_columns = X_columns
     self.Y_columns = Y_columns
     self.standardise = []
-    self.train_test_val_split = "0.3:0.3:0.4"
+    self.train_test_val_split = "0.6:0.1:0.3"
     self.remove_quantile = 0.0
     self.equalise_y_wts = False
     self.train_test_y_vals = {}
@@ -40,7 +40,7 @@ class PreProcess():
     self.cut_values = {}
     self.parameters = {}
     self.output_dir = "data/"
-    self.plot_dir = "plots/"
+    self.plot_dir = "plots"
     self._SetOptions(options)
 
   def _SetOptions(self, options):
@@ -60,6 +60,59 @@ class PreProcess():
     print(">> Loading full dataset.")
     dl = DataLoader(self.parquet_file_name)
     full_dataset = dl.LoadFullDataset()
+
+    print(">> Exlcuding the negative weights.")
+    full_dataset = full_dataset[full_dataset["wt"] > 0]
+    
+
+    # print(">> Exlcuding the evnets with extreme weights.")
+    # print("befreo lenth", len(full_dataset["wt"]))
+
+    # wt2 = full_dataset['wt']
+    # max_value = wt2.max()
+    # min_value = wt2.min()
+    # mean_val  = wt2.mean()
+    # median_val  = wt2.median()
+    # std_val = wt2.std()
+    
+    # # print("Maximum value:", max_value)
+    # # print("Minimum value:", min_value)
+    # # print("Mean value:", mean_val)
+    # # print("Median value:", median_val)
+    # # print("Standard deviation:", std_val)
+
+    # full_dataset = full_dataset[full_dataset["wt"] < mean_val + 3 * std_val]
+    
+    # print("+++++++++++++++++++++")
+    # print("after lenth", len(full_dataset["wt"]))
+    # exit(0)
+
+    # wt1 = full_dataset['wt']
+    # max_value = wt1.max()
+    # min_value = wt1.min()
+    # mean_val  = wt1.mean()
+    # median_val  = wt1.median()
+    # std_val = wt1.std()
+    
+    # print("Maximum value:", max_value)
+    # print("Minimum value:", min_value)
+    # print("Mean value:", mean_val)
+    # print("Median value:", median_val)
+    # print("Standard deviation:", std_val)
+    # hist_der, bins_der = np.histogram(full_dataset['wt'], bins = 20)
+    # plot_name_der = self.plot_dir + f"/After_distribution_of_weights"
+
+    # plot_histograms(
+    #   bins_der[:-1],
+    #   np.log([hist_der]),
+    #   [None],
+    #   title_right = "",
+    #   name = plot_name_der,
+    #   x_label = "Weights",
+    #   y_label = "Events (log)",
+    #   anchor_y_at_0 = True,
+    #   drawstyle = "steps",
+    # )
 
     # Get X and Y column names
     print(">> Getting columns from dataset.")
@@ -102,12 +155,16 @@ class PreProcess():
     self.parameters["yield"] = {}
     if len(Y_columns) > 0:
       unique_rows = full_dataset.loc[:,Y_columns].drop_duplicates()
+
       for _, ur in unique_rows.iterrows():
         matching_rows = (full_dataset.loc[:,Y_columns] == ur).all(axis=1)
+
         name = GetYName(ur, purpose="file")
         self.parameters["yield"][name] = float(np.sum(full_dataset.loc[:,"wt"][matching_rows].to_numpy(), dtype=np.float128))
     else:
       self.parameters["yield"]["all"] = float(np.sum(full_dataset.loc[:,"wt"].to_numpy(), dtype=np.float128))
+    print("the len of yield is", len(self.parameters["yield"]))
+    # print("the yield get in the preprocess term", self.parameters["yield"])
 
     # Train test split
     print(">> Train/Test/Val splitting the data.")
@@ -134,13 +191,33 @@ class PreProcess():
     for k, v in self.validation_y_vals.items():
       if k in val_df.columns:
         val_df = val_df[val_df[k].isin(v)]
- 
+
+    # print(">> Exlcuding the evnets with extreme weights.")
+    # print("before", len(full_dataset["wt"]))
+
+    # wt2 = full_dataset['wt']
+    # max_value = wt2.max()
+    # min_value = wt2.min()
+    # mean_val  = wt2.mean()
+    # median_val  = wt2.median()
+    # std_val = wt2.std()
+    
+    # print("Maximum value:", max_value)
+    # print("Minimum value:", min_value)
+    # print("Mean value:", mean_val)
+    # print("Median value:", median_val)
+    # print("Standard deviation:", std_val)
+
+    # full_dataset = full_dataset[full_dataset["wt"] < mean_val + 3 * std_val]
+    # print("after", len(full_dataset["wt"]))
+
     del dl, full_dataset, temp_df
     gc.collect()
 
     # Get standardisation parameters
     print(">> Getting standardisation parameters.")
     self.parameters["standardisation"] = {}
+
     for column_name in train_df.columns:
       if column_name in self.standardise:
         self.parameters["standardisation"][column_name] = self.GetStandardisationParameters(train_df.loc[:,column_name])
@@ -150,6 +227,7 @@ class PreProcess():
     train_df = self.TransformData(train_df)
     test_df = self.TransformData(test_df)
     val_df = self.TransformData(val_df)
+    
 
     # Split in X, Y and wt
     print(">> Splitting X, Y and wt datasets.")
@@ -161,25 +239,25 @@ class PreProcess():
     Y_val_df = val_df[Y_columns]
     wt_train_df = train_df[["wt"]]
     wt_test_df = test_df[["wt"]]
-    wt_val_df = val_df[["wt"]]      
-
-    # Remove outliers
-    print(">> Removing outliers.")
-    # THIS IS NOT THE CORRECT THING TO DO!
-    for k in X_train_df.columns:
-      self.cut_values[k] = [np.quantile(X_train_df.loc[:,k], self.remove_quantile), np.quantile(X_train_df.loc[:,k], 1-self.remove_quantile)]
-      select_indices = ((X_train_df.loc[:,k]>=self.cut_values[k][0]) & (X_train_df.loc[:,k]<=self.cut_values[k][1]))
-      X_train_df = X_train_df.loc[select_indices,:]
-      Y_train_df = Y_train_df.loc[select_indices,:]
-      wt_train_df = wt_train_df.loc[select_indices,:]
-      select_indices = ((X_test_df.loc[:,k]>=self.cut_values[k][0]) & (X_test_df.loc[:,k]<=self.cut_values[k][1]))
-      X_test_df = X_test_df.loc[select_indices,:]
-      Y_test_df = Y_test_df.loc[select_indices,:]
-      wt_test_df = wt_test_df.loc[select_indices,:]
-      select_indices = ((X_val_df.loc[:,k]>=self.cut_values[k][0]) & (X_val_df.loc[:,k]<=self.cut_values[k][1]))
-      X_val_df = X_val_df.loc[select_indices,:]
-      Y_val_df = Y_val_df.loc[select_indices,:]
-      wt_val_df = wt_val_df.loc[select_indices,:]
+    wt_val_df = val_df[["wt"]]    
+ 
+    # # Remove outliers
+    # print(">> Removing outliers.")
+    # # THIS IS NOT THE CORRECT THING TO DO!
+    # for k in X_train_df.columns:
+    #   self.cut_values[k] = [np.quantile(X_train_df.loc[:,k], self.remove_quantile), np.quantile(X_train_df.loc[:,k], 1-self.remove_quantile)]
+    #   select_indices = ((X_train_df.loc[:,k]>=self.cut_values[k][0]) & (X_train_df.loc[:,k]<=self.cut_values[k][1]))
+    #   X_train_df = X_train_df.loc[select_indices,:]
+    #   Y_train_df = Y_train_df.loc[select_indices,:]
+    #   wt_train_df = wt_train_df.loc[select_indices,:]
+    #   select_indices = ((X_test_df.loc[:,k]>=self.cut_values[k][0]) & (X_test_df.loc[:,k]<=self.cut_values[k][1]))
+    #   X_test_df = X_test_df.loc[select_indices,:]
+    #   Y_test_df = Y_test_df.loc[select_indices,:]
+    #   wt_test_df = wt_test_df.loc[select_indices,:]
+    #   select_indices = ((X_val_df.loc[:,k]>=self.cut_values[k][0]) & (X_val_df.loc[:,k]<=self.cut_values[k][1]))
+    #   X_val_df = X_val_df.loc[select_indices,:]
+    #   Y_val_df = Y_val_df.loc[select_indices,:]
+    #   wt_val_df = wt_val_df.loc[select_indices,:]
 
     # Equalise weights in each unique y values
     if self.equalise_y_wts:
@@ -187,7 +265,23 @@ class PreProcess():
       wt_train_df = self.EqualiseYWeights(Y_train_df, wt_train_df)
       wt_test_df = self.EqualiseYWeights(Y_test_df, wt_test_df)
       wt_val_df = self.EqualiseYWeights(Y_val_df, wt_val_df)
+      
+    # hist_der, bins_der = np.histogram(wt_test_df, bins = 20)
+    # plot_name_der = self.plot_dir + f"/wt_test_of_weights"
 
+    # plot_histograms(
+    #   bins_der[:-1],
+    #   np.log([hist_der]),
+    #   [None],
+    #   title_right = "",
+    #   name = plot_name_der,
+    #   x_label = "Weights",
+    #   y_label = "Events (log)",
+    #   anchor_y_at_0 = True,
+    #   drawstyle = "steps",
+    # )
+    # exit(0)  
+    
     # Write parquet files
     self.parameters["file_location"] = self.output_dir
     MakeDirectories(self.output_dir)
@@ -258,7 +352,6 @@ class PreProcess():
     else:
       return thresholds, cs
 
-
   # Determine the spline function for the discrete function
   def Spline(self, x, y):
     """
@@ -286,7 +379,6 @@ class PreProcess():
     Returns:
         pd.Series: The transformed column.
     """
-
     output_ranges = self.parameters["discrete_thresholds"].get(column_name, {})
     data = copy.deepcopy(data)
 
@@ -377,22 +469,56 @@ class PreProcess():
     Returns:
         pd.DataFrame: DataFrame with equalized weights.
     """
+    # if len(Y.columns) > 0:
+    #   unique_rows = Y.drop_duplicates()
+
+    #   if unique_rows.empty:
+    #     print("No unique rows found.")
+    #   else:
+    #     sum_weights = []
+    #     for _, ur in unique_rows.iterrows():
+    #         matching_rows = (Y == ur).all(axis=1)
+    #         total_weight = float(wt[matching_rows].sum().iloc[0])
+    #         if total_weight > 0:  # Exclude negative weights
+    #             sum_weights.append(total_weight)
+    #         else:
+    #             sum_weights.append(0)  # Append 0 to maintain the index alignment
+
+    #     max_sum_weights = max(sum_weights)
+
+    #     ind = 0
+    #     for _, ur in unique_rows.iterrows():
+    #         if sum_weights[ind] <= 0:  # Skip if the sum of weights is not positive
+    #             ind += 1
+    #             continue
+    #         matching_rows = (Y == ur).all(axis=1)
+    #         wt.loc[matching_rows, :] = (max_sum_weights / sum_weights[ind]) * wt.loc[matching_rows, :]
+    #         ind += 1
+
+    # print("+++++++", wt)
+
 
     if len(Y.columns) > 0:
       unique_rows = Y.drop_duplicates()
 
-      sum_weights = []
-      for _, ur in unique_rows.iterrows():
-        matching_rows = (Y == ur).all(axis=1)
-        sum_weights.append(float(wt[matching_rows].sum().iloc[0]))
-      max_sum_weights = max(sum_weights)
+      if unique_rows.empty:
+        print("No unique rows found.")
+      else: 
+        sum_weights = []
+        for _, ur in unique_rows.iterrows():
+          matching_rows = (Y == ur).all(axis=1)
+          sum_weights.append(float(wt[matching_rows].sum().iloc[0]))
 
-      ind = 0
-      for _, ur in unique_rows.iterrows():
-        if sum_weights[ind] == 0: continue
-        matching_rows = (Y == ur).all(axis=1)
-        wt.loc[matching_rows,:] = (max_sum_weights / sum_weights[ind]) * wt.loc[matching_rows,:]
-        ind += 1
+        max_sum_weights = max(sum_weights)
+
+        ind = 0
+        for _, ur in unique_rows.iterrows():
+          if sum_weights[ind] == 0: continue
+          matching_rows = (Y == ur).all(axis=1)
+          wt.loc[matching_rows,:] = (max_sum_weights / sum_weights[ind]) * wt.loc[matching_rows,:]
+          ind += 1
+      print("check the weigt ++++++", wt)
+
 
     return wt
 
@@ -412,8 +538,7 @@ class PreProcess():
           data.loc[:,column_name] = self.DiscreteToContinuous(data.loc[:,column_name], column_name, inverse=False)
       if column_name in self.parameters["standardisation"]:
           data.loc[:,column_name] = self.Standardise(data.loc[:,column_name], column_name)
-
-
+    
     return data
 
   def UnTransformData(self, data):
@@ -450,6 +575,7 @@ class PreProcess():
         else:
           prob -= np.log(self.parameters["standardisation"][column_name]["std"])
     return prob 
+  
 
   def LoadSplitData(self, dataset="train", get=["X","Y","wt"], use_nominal_wt=False, untransformX=True):
     """
@@ -531,6 +657,8 @@ class PreProcess():
 
     return output
 
+  
+
   def PlotX(self, vary, freeze={}, n_bins=100, ignore_quantile=0.001, dataset="train", extra_name="", transform=False):
     """
     Plot histograms for X variables.
@@ -548,29 +676,13 @@ class PreProcess():
     """
     # Loads data
     X_data, Y_data, wt_data = self.LoadSplitData(dataset=dataset, untransformX=(not transform))
-
-    # Sets freeze conditions
-    final_condition = None
-    for col, val in freeze.items():
-      if col in Y_data.columns:
-        if val == "central":
-          uv = np.sort(np.unique(Y_data.loc[:,col], axis=0))
-          val = uv[len(uv) // 2]
-        col_condition = (Y_data.loc[:,col] == val)
-        if final_condition is None:
-            final_condition = col_condition
-        else:
-            final_condition = final_condition & col_condition
-    if final_condition is not None:
-      indices = Y_data[final_condition].index
-      X_data = X_data.iloc[indices]
-      Y_data = Y_data.iloc[indices]
-      wt_data = wt_data.iloc[indices]
     
-    #X_data = X_data.reindex(range(len(X_data)))
+    # X_data = X_data.reindex(range(len(X_data)))
     X_data = X_data.reset_index(drop=True)
     Y_data = Y_data.reset_index(drop=True)
     wt_data = wt_data.reset_index(drop=True)
+    # print("data after the without freeze conditions", Y_data)
+    # exit(0)
 
     # Loop through X variables
     for col in X_data.columns:
@@ -578,6 +690,7 @@ class PreProcess():
       # Find combined binning first
       trimmed_data = X_data.loc[:,[col]]
       trimmed_data.loc[:,"wt"] = wt_data
+
       lower_value = np.quantile(trimmed_data.loc[:,col], ignore_quantile)
       upper_value = np.quantile(trimmed_data.loc[:,col], 1-ignore_quantile)
       trimmed_data = trimmed_data[(trimmed_data.loc[:,col] >= lower_value) & (trimmed_data.loc[:,col] <= upper_value)]

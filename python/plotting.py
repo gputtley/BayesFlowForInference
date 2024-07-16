@@ -193,6 +193,7 @@ def plot_likelihood(
     x, 
     y, 
     crossings, 
+    roots,
     name="lkld", 
     xlabel="", 
     true_value=None, 
@@ -251,10 +252,12 @@ def plot_likelihood(
 
   if -1 in crossings.keys():  
     plt.plot([crossings[-1],crossings[-1]], [0,1], linestyle='--', color='orange')
+    plt.plot([roots[0], roots[0]], [0, 1], linestyle="--", color= "red")
   if -2 in crossings.keys():  
     plt.plot([crossings[-2],crossings[-2]], [0,4], linestyle='--', color='orange')
   if 1 in crossings.keys():  
     plt.plot([crossings[1],crossings[1]], [0,1], linestyle='--', color='orange')
+    plt.plot([roots[1], roots[1]], [0, 1], linestyle="--", color= "red")
   if 2 in crossings.keys():  
     plt.plot([crossings[2],crossings[2]], [0,4], linestyle='--', color='orange')
   plt.plot([x[0],x[-1]], [1,1], linestyle='--', color='gray')
@@ -265,6 +268,10 @@ def plot_likelihood(
   if -1 in crossings.keys() and 1 in crossings.keys():
     text = f'Result: {round(crossings[0],2)} + {round(crossings[1]-crossings[0],2)} - {round(crossings[0]-crossings[-1],2)}'
     ax.text(0.03, 0.96, text, transform=ax.transAxes, va='top', ha='left')
+
+    # add another information on the plot
+    text2 = f'Result: {round(crossings[0],2)} + {round(roots[1]-crossings[0],2)} - {round(crossings[0] -  roots[0],2)}'
+    ax.text(0.03, 0.92, text2, transform=ax.transAxes, va='top', ha='left')
 
   plt.xlim(x[0],x[-1])
   plt.ylim(0,y_max)

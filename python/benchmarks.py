@@ -68,6 +68,32 @@ class Benchmarks():
         ],    
         "toy_signal_events" : 1000.0,
        },
+
+      "5D+3D": {
+        "signal_resolution" : 0.01,
+        "exponential_factor" : 15,
+        "chi_1" : 3.5,
+        "chi_2" : 5.0,
+        "kappa":4.0,
+        # Ys:
+        "Y1" : [
+          0.24, 0.12, 0.55, 0.15, 0.99, 
+          0.74, 0.53, 0.11, 0.56, 0.34, 
+          0.47, 0.35, 0.22, 0.65, 0.43,
+    ],
+        "Y2": [
+          166.00, 166.25, 166.50, 166.75, 167.00,
+          167.25, 167.50, 167.75, 168.00, 168.25,
+          168.50, 168.75, 169.00, 169.25, 169.50, 
+        ],
+        "Y3": [
+          170.00, 170.50, 171.00, 171.50, 172.00,
+          172.50, 173.00, 173.50, 174.00, 174.50, 
+          175.00, 176.00, 177.00, 178.00, 179.00,
+        ],
+        "toy_signal_events" : 1000.0,
+       },
+
       "5D": { 
         "signal_resolution" : 0.01,
         "exponential_factor_1" : 20,
@@ -81,6 +107,7 @@ class Benchmarks():
         ],    
         "toy_signal_events" : 1000.0,
       },
+
       "5D+D": {
         "signal_resolution" : 0.01,
         "chi" : 5.0,
@@ -94,6 +121,7 @@ class Benchmarks():
         ],    
         "toy_signal_events" : 1000.0,
       },
+
       "12D": {
         "signal_resolution" : 0.01,
         "signal_resolution_1" : 0.02,
@@ -210,6 +238,26 @@ class Benchmarks():
       chi_pdf_1 = ((1/2)**(k_chi_1/2)) / gamma(k_chi_1/2) * (X[1]**(k_chi_1/2 - 1)) * np.exp(-X[1]/2)
 
       return gaussian_pdf * chi_pdf_1
+    
+    elif file_name == "5D+3D":
+
+      mean = np.mean(np.mean(Y2 + Y3) + Y1)
+      std_dev = self.model_parameters[self.name]["signal_resolution"] * mean
+      gaussian_pdf = (1 / (std_dev * np.sqrt(2 * np.pi))) *  np.exp(-(X[0] - mean)**2 / (2 * std_dev**2))
+
+      beta = mean / self.model_parameters[self.name]["exponential_factor"]
+      exponential_pdf = (1/beta)*np.exp(-X[1]/beta)
+
+      k_chi_1 = self.model_parameters[self.name]["chi_1"] + (mean - 173.0) * 0.1 
+      chi_pdf_1 = ((1/2)**(k_chi/2)) / gamma(k_chi_1/2) * (X[2]**(k_chi_1/2 - 1)) * np.exp(-X[2]/2)
+      k_chi_2 = self.model_parameters[self.name]["chi_2"] + (mean - 173.0) * 0.1 + k_chi_1 * 0.05
+      chi_pdf_2 = ((1/2)**(k_chi_2/2)) / gamma(k_chi_2/2) * (X[3]**(k_chi_2/2 - 1)) * np.exp(-X[3]/2)
+
+      mu_v = 0.0 
+      kappa_v = (1/ (self.model_parameters[self.name]["kappa"] * mean * 0.1))** 10 * (10**15) 
+      von_mises_pdf = np.exp(kappa_v * np.cos(X[4] - mu_v)) / (2 * np.pi * i0(kappa_v))
+      
+      return gaussian_pdf * exponential_pdf * chi_pdf_1 * chi_pdf_2 * von_mises_pdf
 
     elif file_name == "5D":
 
@@ -367,6 +415,7 @@ class Benchmarks():
           "wt" : (len(self.model_parameters[self.name]["true_masses"])*float(self.model_parameters[self.name]["toy_signal_events"])/float(signal_entries))*np.ones(int(self.array_size))
         }
       )
+
       for mass in self.model_parameters[self.name]["true_masses"]:
         df.loc[(df.loc[:,"true_mass"] == mass), "wt"] *= float(self.model_parameters[self.name]["toy_signal_events"]) / float(self.model_parameters[self.name]["signal_fraction"] * np.sum(df.loc[(df.loc[:,"true_mass"] == mass), "wt"]))
 
@@ -417,6 +466,49 @@ class Benchmarks():
       parquet_file_path = f"data/{self.name}_ExpBkg.parquet"
       pq.write_table(table, parquet_file_path)
 
+    elif self.name == "5D+3D":
+
+      Y1 = np.random.choice(self.model_parameters[self.name]["Y1"], size=self.array_size)
+      Y2 = np.random.choice(self.model_parameters[self.name]["Y2"], size=self.array_size)
+      Y3 = np.random.choice(self.model_parameters[self.name]["Y3"], size=self.array_size)
+      Y = np.mean(Y2 + Y3) + Y1
+
+      X1 = np.random.normal(Y, self.model_parameters[self.name]["signal_resolution"]*Y, size = self.array_size)
+      X2 = np.random.exponential(Y / self.model_parameters[self.name]["exponential_factor"])
+      k_chi_1 = self.model_parameters[self.name]["chi_1"] + (Y - 173.0) * 0.1
+      X3 = np.random.chisquare(df=k_chi_1, size=self.array_size)
+      k_chi_2 = self.model_parameters[self.name]["chi_2"] + (Y - 173.0) * 0.1 + k_chi_1 * 0.05
+      X4 = np.random.chisquare(df=k_chi_2, size=self.array_size)
+      mu = 0.0 
+      kappa_v = (1/ (self.model_parameters[self.name]["kappa"] * Y * 0.1))**10 * (10**15)
+      X5 = vonmises.rvs(kappa_v, loc=mu, size=self.array_size)
+
+      df = pd.DataFrame(
+        {
+          "X1": X1,
+          "X2": X2,
+          "X3": X3,
+          "X4": X4,
+          "X5": X5, 
+          "Y1": Y1,
+          "Y2": Y2,
+          "Y3": Y3,
+          "wt": (len(self.model_parameters[self.name]["Y1"])*(float(self.model_parameters[self.name]["toy_signal_events"])/self.array_size)*np.ones(self.array_size))
+        }
+      )
+
+      # Rescale weights so all are equivalent
+      for mass in self.model_parameters[self.name]["Y2"]:
+        df.loc[(df.loc[:,"Y2"] == mass), "wt"] *= float(self.model_parameters[self.name]["toy_signal_events"]) / float(np.sum(df.loc[(df.loc[:,"Y2"] == mass), "wt"]))
+      # for mass in self.model_parameters[self.name]["Y2"]:
+      #   df.loc[(df.loc[:,"Y2"] == mass), "wt"] *= float(self.model_parameters[self.name]["toy_signal_events"]) / float(np.sum(df.loc[(df.loc[:,"Y2"] == mass), "wt"]))
+      # for mass in self.model_parameters[self.name]["Y3"]:
+      #   df.loc[(df.loc[:,"Y3"] == mass), "wt"] *= float(self.model_parameters[self.name]["toy_signal_events"]) / float(np.sum(df.loc[(df.loc[:,"Y3"] == mass), "wt"]))
+
+      table = pa.Table.from_pandas(df)
+      parquet_file_path = f"data/{self.name}.parquet"
+      pq.write_table(table, parquet_file_path)
+
     elif self.name == "2D":
 
       Y = np.random.choice(self.model_parameters[self.name]["true_masses"], size=self.array_size)
@@ -439,6 +531,7 @@ class Benchmarks():
       table = pa.Table.from_pandas(df)
       parquet_file_path = f"data/{self.name}.parquet"
       pq.write_table(table, parquet_file_path)
+
 
     elif self.name == "5D":
 
@@ -680,6 +773,45 @@ class Benchmarks():
             "Y" : [
               171.0,171.5,172.0,172.5,173.0,173.5,174.0,174.5,175.0,
             ]
+          }
+        },
+        "inference" : {},
+        "validation" : {},
+        "data_file" : None
+      }
+
+    elif self.name == "5D+3D":
+      cfg = {
+        "name" : f"Benchmark_{self.name}",
+        "files" : {self.name : f"data/{self.name}.parquet"},
+        "variables" : ["X1", "X2", "X3", "X4", "X5"],
+        "pois" : ["Y1", "Y2", "Y3"],
+        "nuisances" : [],
+        "preprocess" : {
+          "standardise" : "all",
+          "train_test_val_split" : "0.3:0.3:0.4",
+          "equalise_y_wts" : True,
+          "train_test_y_vals" : {
+            "Y1" : [
+              0.24, 0.12, 0.55, 0.15, 0.99, 
+              0.74, 0.53, 0.11, 0.56, 0.34, 
+              0.47, 0.35, 0.22, 0.65, 0.43,     
+            ],
+            "Y2": [
+              166.00, 166.25, 166.50, 166.75, 167.00,
+              167.25, 167.50, 167.75, 168.00, 168.25,
+              168.50, 168.75, 169.00, 169.25, 169.50, 
+            ],
+            "Y3": [
+              170.00, 170.50, 171.00, 171.50, 172.00,
+              172.50, 173.00, 173.50, 174.00, 174.50, 
+              175.00, 176.00, 177.00, 178.00, 179.00,
+            ]
+          },
+          "validation_y_vals" : {
+            "Y1" : [0.74, 0.53, 0.11, 0.56, 0.34,],
+            "Y2": [167.25, 167.50, 167.75, 168.00, 168.25,],
+            "Y3": [172.50, 173.00, 173.50, 174.00, 174.50,]
           }
         },
         "inference" : {},

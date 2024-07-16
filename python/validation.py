@@ -9,6 +9,9 @@ import numpy as np
 import pandas as pd
 import copy
 import yaml
+from decimal import Decimal
+from scipy.optimize import fsolve
+from scipy.interpolate import interp1d
 
 class Validation():
   """
@@ -41,7 +44,6 @@ class Validation():
     self._SetOptions(options)
     self.X_columns = self.data_parameters[list(self.data_parameters.keys())[0]]["X_columns"]
     self.X_plot_columns = copy.deepcopy(self.X_columns)
-
 
     # Data storage
     self.synth = None
@@ -76,12 +78,11 @@ class Validation():
 
     # Do inference on data
     if self.infer is not None and not ignore_infer:
-        
-        dl = DataLoader(self.infer)
-        data = dl.LoadFullDataset()
-        total_X = data.loc[:,self.X_columns].to_numpy()
-        total_wt = data.loc[:,"wt"].to_numpy().reshape(-1,1)
-
+      dl = DataLoader(self.infer)
+      data = dl.LoadFullDataset()
+      total_X = data.loc[:,self.X_columns].to_numpy()
+      total_wt = data.loc[:,"wt"].to_numpy().reshape(-1,1)
+          
     # Do inference on simulated data
     else:
 
@@ -97,7 +98,7 @@ class Validation():
         pp.parameters = val
         pp.output_dir = val["file_location"]
 
-        # Load and reformat data
+        # Load and reformat data (dataset = "val")
         X, Y, wt = pp.LoadSplitData(dataset=self.data_key, get=["X","Y","wt"], use_nominal_wt=use_nominal_wt, untransformX=(not transform))
 
         if columns is None:
@@ -105,24 +106,29 @@ class Validation():
         X = X.to_numpy()
         Y = Y.to_numpy()
         wt = wt.to_numpy()
-
+  
         if not return_full:
 
           # Choose the matching Y rows
           sel_row = np.array([row[columns.index(y)] for y in val["Y_columns"]])
-          if Y.shape[1] > 0:
-            matching_rows = np.all(np.isclose(Y, sel_row, rtol=self.tolerance, atol=self.tolerance), axis=1)
-            X = X[matching_rows]
-            wt = wt[matching_rows]
+
+          matching_rows = np.all(np.isclose(Y, sel_row, rtol=self.tolerance, atol=self.tolerance), axis=1)
+
+          X = X[matching_rows]
+          wt = wt[matching_rows]
 
           # Scale weights to the correct yield
           if "yield" in val.keys():
             if "all" in val["yield"].keys():
               sum_wt = val["yield"]["all"]
             else:
+              if not GetYName(sel_row,purpose="file") in val['yield'].keys(): continue
               sum_wt = val["yield"][GetYName(sel_row,purpose="file")]
+              # print("the sum of the weight", sum_wt)
+
             old_sum_wt = np.sum(wt, dtype=np.float128)
             wt *= sum_wt/old_sum_wt
+            # print("the weight", wt)
         
           # Scale wt by the rate parameter value
           if "mu_"+key in columns:
@@ -149,7 +155,6 @@ class Validation():
           if return_y:
             total_Y = np.vstack((total_Y, Y))
 
-      # Lower validation stats
       if self.lower_validation_stats is not None:
         if len(total_X) > self.lower_validation_stats:
           rng = np.random.RandomState(seed=42)
@@ -320,8 +325,7 @@ class Validation():
           else:
             total_X[key] = X
             total_wt[key] = wt.flatten() 
-
-      
+ 
       self.synth_row = row
       self.synth = total_X
       if not separate: total_wt = total_wt.flatten()
@@ -377,13 +381,14 @@ class Validation():
       )
 
     else:
-
+      # print("the parameters item", self.data_parameters.items())
+      # exit(0)
       self.lkld = Likelihood(
         {
           "pdfs":self.model,
           "yields":{k:MakeYieldFunction(self.pois, self.nuisances, v) for k, v in self.data_parameters.items()}
         }, 
-        type="unbinned_extended", 
+        type="unbinned", 
         data_parameters=self.data_parameters,
         parameters=self.validation_options,
       )
@@ -442,6 +447,7 @@ class Validation():
         ind (int): Index for file naming (default is 0).
     """
     X, wt = self._GetXAndWts(row, columns=columns)
+
     self.lkld.GetAndWriteBestFitToYaml(X, row, initial_guess, wt=wt, filename=f"{self.out_dir}/best_fit_{ind}.yaml")
 
   def GetAndDumpScanRanges(self, row, col, columns=None, ind=0):
@@ -471,6 +477,36 @@ class Validation():
     """
     X, wt = self._GetXAndWts(row, columns=columns)
     self.lkld.GetAndWriteScanToYaml(X, row, col, col_val, wt=wt, filename=f"{self.out_dir}/scan_results_{col}_{ind1}_{ind2}.yaml")
+
+  def GetAndDumpHessian(self, row, columns=None, ind=0):
+    """
+    Get and dump Hessian matrix to a YAML file.        
+    """
+    X, wt = self._GetXAndWts(row, columns=columns)
+    self.lkld.GetAndWriteHessianToYaml(X, wt, epsilon=1e-2, repetition=10, filename=f"{self.out_dir}/Hessian_matrix_{ind}.yaml")
+  
+  def GetAndDumpD_matrix(self, row, columns=None, ind=0):
+    """
+    Get and dump D matrix to a YAML file.        
+    """
+    X, wt = self._GetXAndWts(row, columns=columns)
+
+    self.lkld.GetAndWriteD_matrixToYaml(X, wt, filename=f"{self.out_dir}/D_matrix_{ind}.yaml")
+    
+  def GetAndDumpCovariance(self, ind=0):
+    """
+    Get and dump Covariance matrix to a YAML file.        
+    """
+    self.lkld.GetAndWriteCovarianceToYaml(filename=f"{self.out_dir}/Covariance_matrix_{ind}.yaml")
+
+  def GetAndDumpCovariance_D(self, ind=0):
+    self.lkld.GetAndWriteCovariance_DToYaml(filename=f"{self.out_dir}/Covariance_matrix_with_Dmatrix_{ind}.yaml")
+
+  def GetAndDumpUnceritainties(self, alpha=0.95, ind=0):
+    """
+    Get and dump Uncertainties to a YAML file.        
+    """
+    self.lkld.GetAndWriteUncertaintiesToYaml(filename=f"{self.out_dir}/Uncertainties_{ind}.yaml")
 
   def PlotCorrelationMatrix(self, row, columns=None, extra_dir=""):
     """
@@ -699,7 +735,6 @@ class Validation():
 
           synth_hists_full[f"Synthetic {key} {sample_plot_extra_name}"] = synth_hists
 
-
         X_hists = []
         X_err_hists = []
         synth_err_hists = []
@@ -776,6 +811,22 @@ class Validation():
     if not eff_events == total_weight:
       other_lkld[r"Inferred N=$N_{eff}$"] = (eff_events/total_weight)*np.array(y)
 
+    values = np.array((eff_events/total_weight)*np.array(y))
+    scan_vals = np.array(x)
+
+    # define the quadratic interpolation function
+    def quadratic_func(x):
+      return interp1d(scan_vals, values, kind='quadratic', bounds_error=False, fill_value="extrapolate")(x)
+    # define the function for finding rotts f(x) = 1
+    def func_to_solve(x):
+      return quadratic_func(x) -1
+    # initial guess best_fit +  (eff_events/total_weight)*np.array(y) around zero
+    index_of_zero = np.where(values == 0)[0][0]
+    values_around_zero = values[index_of_zero -1 : index_of_zero + 2: 2]
+    initial_guess = [crossings[0] - values_around_zero[0], crossings[0] + values_around_zero[1]]
+    # solve for the roots
+    roots = fsolve(func_to_solve, initial_guess)
+
     # make true likelihood
     if true_pdf is not None:
 
@@ -812,6 +863,7 @@ class Validation():
       x, 
       y, 
       crossings, 
+      roots,
       name=f"{self.plot_dir}{add_extra_dir}/likelihood_{col}_y_{file_extra_name}", 
       xlabel=col, 
       true_value=row[ind],

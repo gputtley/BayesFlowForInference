@@ -2,11 +2,15 @@ import copy
 import yaml
 import time
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 from scipy.interpolate import RegularGridInterpolator
 from plotting import plot_likelihood, plot_histograms
 from other_functions import GetYName, MakeDirectories
 from pprint import pprint
+from functools import partial
+from scipy.stats import norm
+from iminuit import Minuit
 
 class Likelihood():
   """
@@ -33,6 +37,7 @@ class Likelihood():
     # saved parameters
     self.best_fit = None
     self.best_fit_nll = None
+    self.plot_dir = "plots/TopMassV3_stage2_2D/ttbar"
 
   def _MakeY(self):
     """
@@ -50,7 +55,7 @@ class Likelihood():
     return Y_columns
 
 
-  def Run(self, X, Y, wts=None, return_ln=False, before_sum=False):
+  def Run(self, X, Y, wts=None, return_ln=False, before_sum=False, verbose=True, single_event=False):
     """
     Evaluates the likelihood for given data.
 
@@ -64,13 +69,12 @@ class Likelihood():
         float: The likelihood value.
 
     """
-
     if self.type == "unbinned":
-      lkld_val = self.Unbinned(X, Y, wts=wts, return_ln=return_ln, before_sum=before_sum)
+      lkld_val = self.Unbinned(X, Y, wts=wts, return_ln=return_ln, before_sum=before_sum, verbose=verbose)
     elif self.type == "unbinned_extended":
-      lkld_val = self.UnbinnedExtended(X, Y, wts=wts, return_ln=return_ln, before_sum=before_sum)
+      lkld_val = self.UnbinnedExtended(X, Y, wts=wts, return_ln=return_ln, before_sum=before_sum, verbose=verbose, single_event=single_event)
     elif self.type == "binned_extended":
-      lkld_val = self.BinnedExtended(X, Y, wts=wts, return_ln=return_ln)
+      lkld_val = self.BinnedExtended(X, Y, wts=wts, return_ln=return_ln, verbose=verbose)
 
     return lkld_val
 
@@ -91,6 +95,7 @@ class Likelihood():
     """
     Computes the likelihood for unbinned data.
 
+
     Args:
         X (array): The independent variables.
         Y (array): The model parameters.
@@ -99,7 +104,6 @@ class Likelihood():
 
     Returns:
         float: The likelihood value.
-
     """
 
     Y = list(Y)
@@ -143,13 +147,13 @@ class Likelihood():
 
     # Rescale so total pdf integrate to 1
     ln_lklds -= np.log(sum_rate_params)
-
+   
+    if before_sum:
+      return ln_lklds
+    
     # Weight the events
     if wts is not None:
       ln_lklds = wts.flatten()*ln_lklds
-
-    if before_sum:
-      return ln_lklds
 
     # Product the events
     ln_lkld = np.sum(ln_lklds, dtype=np.float128)
@@ -171,7 +175,7 @@ class Likelihood():
     else:
       return np.exp(ln_lkld)
 
-  def UnbinnedExtended(self, X, Y, wts=None, return_ln=False, before_sum=False, verbose=True):
+  def UnbinnedExtended(self, X, Y, wts=None, return_ln=False, before_sum=False, verbose=True, single_event=False):
     """
     Computes the extended likelihood for unbinned data.
 
@@ -180,10 +184,12 @@ class Likelihood():
         Y (array): The model parameters.
         wts (array): The weights for the data points (optional).
         return_ln (bool): Whether to return the natural logarithm of the likelihood (optional).
+        before_sum (bool): Whether to return the liklihood before sum (optional).
+        verbose (bool): Whether to print the computation (optional).
+        single_event (bool): Whether to process the single event, that not include the yield in the likelihood funciton (optional).
 
     Returns:
         float: The likelihood value.
-
     """
     start_time = time.time()
     Y = list(Y)
@@ -192,14 +198,19 @@ class Likelihood():
     for name, pdf in self.models["pdfs"].items():
 
       if "mu_"+name in self.Y_columns:
+
         rate_param = Y[self.Y_columns.index("mu_"+name)]
       else:
         rate_param = 1.0
       if rate_param == 0.0: continue
-
       # Get rate times yield times probability
+
       log_p = pdf.Probability(copy.deepcopy(X), np.array([Y]), y_columns=self.Y_columns, return_log_prob=True)
-      ln_lklds_with_rate_params = np.log(rate_param) + np.log(self._GetYield(name, Y, y_columns=self.Y_columns)) + log_p
+      if single_event:
+        ln_lklds_with_rate_params = log_p
+      else:
+        ln_lklds_with_rate_params = np.log(rate_param) + np.log(self._GetYield(name, Y, y_columns=self.Y_columns)) + log_p
+
 
       # Sum together probabilities of different files
       if first_loop:
@@ -207,30 +218,30 @@ class Likelihood():
         first_loop = False
       else:
         ln_lklds = self._LogSumExpTrick(ln_lklds,ln_lklds_with_rate_params)
-
+    
+    if before_sum == True:
+      ln_lkld = ln_lklds
+    
     # Weight the events
     if wts is not None:
       ln_lklds = wts.flatten()*ln_lklds
 
-    if before_sum:
-      return ln_lklds
+    elif before_sum == False:
+      # Product the events
+      ln_lkld = np.sum(ln_lklds, dtype=np.float128)                             
+      # Add poisson term only for the total events
+      total_rate = 0.0
+      for name, pdf in self.models["yields"].items():
 
-    # Product the events
-    ln_lkld = np.sum(ln_lklds, dtype=np.float128)
+        if "mu_"+name in self.Y_columns:
+          rate_param = Y[self.Y_columns.index("mu_"+name)]
+        else:
+          rate_param = 1.0
+        if rate_param == 0.0: continue
 
-    # Add poisson term
-    total_rate = 0.0
-    for name, pdf in self.models["yields"].items():
-
-      if "mu_"+name in self.Y_columns:
-        rate_param = Y[self.Y_columns.index("mu_"+name)]
-      else:
-        rate_param = 1.0
-      if rate_param == 0.0: continue
-
-      total_rate += (rate_param * self._GetYield(name, Y, y_columns=self.Y_columns))
-      
-    ln_lkld -= total_rate
+        total_rate += (rate_param * self._GetYield(name, Y, y_columns=self.Y_columns))
+        
+      ln_lkld -= total_rate
 
     # Add constraints
     if "nuisance_constraints" in self.parameters.keys():
@@ -248,6 +259,7 @@ class Likelihood():
 
     if return_ln:
       return ln_lkld
+      # print("final step", ln_lkld)
     else:
       return np.exp(ln_lkld)
 
@@ -445,7 +457,9 @@ class Likelihood():
         est_sig = np.sqrt(nll)
         m1p1_vals[sign] = step/est_sig
       if fin: nll_could_be_neg = False
-
+    
+    # print(self.best_fit[col_index])
+    # exit(0)
     lower_scan_vals = [float(self.best_fit[col_index] - estimated_sigma_step*ind*m1p1_vals[-1]) for ind in range(int(np.ceil(estimated_sigmas_shown/estimated_sigma_step)),0,-1)]
     upper_scan_vals = [float(self.best_fit[col_index] + estimated_sigma_step*ind*m1p1_vals[1]) for ind in range(1,int(np.ceil(estimated_sigmas_shown/estimated_sigma_step))+1)]
 
@@ -506,6 +520,9 @@ class Likelihood():
     col_index = self.Y_columns.index(col)
     Y = copy.deepcopy(self.best_fit)
     Y[col_index] = col_val
+    print("col_index", col_index)
+    print(col_val)
+
     if len(self.Y_columns) > 1:
       print(f">> Profiled fit for {col}={col_val}")
       freeze = {col : col_val}
@@ -564,6 +581,106 @@ class Likelihood():
     with open(filename, 'w') as yaml_file:
       yaml.dump(dump, yaml_file, default_flow_style=False)  
 
+  def GetAndWriteHessianToYaml(self, X, wts, epsilon=1e-3, repetition=20, filename="Hessian_matrix.yaml"):
+    """
+    Compute the Hessian matrix for model parameters and write them to a YAML file.
+
+    Args:
+        X (array): The independent variables.
+        wts (array): The weights for the data points.
+    """
+
+    # compute the Hessian matrix 
+    H= self.Hessian(X, wts, epsilon, repetition)
+    Y = copy.deepcopy(self.best_fit)
+    # Y = [172.50509108734133]
+
+    dump = {
+      "columns" : self.Y_columns,
+      "best_fit":  [float(i) for i in Y], 
+      "Hessian_matrix" : H.tolist()
+    }
+    pprint(dump)
+    print(f">> Created {filename}")
+    MakeDirectories(filename)
+    with open(filename, 'w') as yaml_file:
+      yaml.dump(dump, yaml_file, default_flow_style=False)
+
+  def GetAndWriteD_matrixToYaml(self, X, wt,filename="D_matrix.yaml"):
+    """
+    Compute the Hessian matrix for model parameters and write them to a YAML file.
+    """
+    D = self.D_matrix(X, wt)
+    Y = copy.deepcopy(self.best_fit)
+    # Y = [172.50509108734133]
+
+    dump = {
+      "columns" : self.Y_columns,
+      "best_fit":  [float(i) for i in Y], 
+      "D_matrix" : D.tolist()
+    }
+
+    pprint(dump)
+    print(f">> Created {filename}")
+    MakeDirectories(filename)
+    with open(filename, 'w') as yaml_file:
+      yaml.dump(dump, yaml_file, default_flow_style=False)
+
+  def GetAndWriteCovarianceToYaml(self, filename="Covariance_matrix.yaml"):
+    """
+    Compute the covariance matrix from Hessian matrix and write them to a YAML file.
+    """
+    # compute the covariance matrix
+    C = self.Covariance()
+    Y = copy.deepcopy(self.best_fit)
+
+    dump = {
+      "columns" : self.Y_columns,
+      "best_fit":  [float(i) for i in Y], 
+      "Covariance_matrix" : C.tolist()
+    }
+    pprint(dump)
+    print(f">> Created {filename}")
+    MakeDirectories(filename)
+    with open(filename, 'w') as yaml_file:
+      yaml.dump(dump, yaml_file, default_flow_style=False)   
+ 
+  def GetAndWriteCovariance_DToYaml(self, filename="Covariance_matrix_with_Dmatrix.yaml"):
+    """
+    Compute the covariance matrix from Hessian matrix and D matrix and write them to a YAML file.
+    """
+    # compute the covariance matrix
+    CD = self.Covariance_D()
+    Y = copy.deepcopy(self.best_fit)
+
+    dump = {
+      "columns" : self.Y_columns,
+      "best_fit":  [float(i) for i in Y], 
+      "Covariance_matrix_with_Dmatrix" : CD.tolist()
+    }
+    pprint(dump)
+    print(f">> Created {filename}")
+    MakeDirectories(filename)
+    with open(filename, 'w') as yaml_file:
+      yaml.dump(dump, yaml_file, default_flow_style=False)   
+
+  def GetAndWriteUncertaintiesToYaml(self, filename="Uncertainties.yaml"):
+    """
+    Compute the uncertainties from covariance matrix and write them to a YAML file.
+    """    
+    uncer, uncer_D = self.Uncertianties()
+    Y = copy.deepcopy(self.best_fit)
+    dump = {
+      "columns" : self.Y_columns,
+      "best_fit":  [float(i) for i in Y], 
+      "Uncertainty" : uncer.tolist(),
+      "Uncertainty_with_Dmatrix": uncer_D.tolist()
+    }
+    pprint(dump)
+    print(f">> Created {filename}")
+    MakeDirectories(filename)
+    with open(filename, 'w') as yaml_file:
+      yaml.dump(dump, yaml_file, default_flow_style=False)   
 
   def MakeScanInSeries(self, X, column, wts=None, estimated_sigmas_shown=3, estimated_sigma_step=0.2, initial_step_fraction=0.001):
     """
@@ -677,7 +794,6 @@ class Likelihood():
         tuple: Best-fit parameters and the corresponding function value.
 
     """
-
     # freeze
     if len(list(freeze.keys())) > 0:
 
@@ -712,7 +828,9 @@ class Likelihood():
     elif method == "low_stat_high_stat":
 
       print(">> Doing low stat minimisation first.")
-
+      if "pdfs" in self.models.keys():
+        for k in self.models["pdfs"].keys():
+          self.models["pdfs"][k].probability_store = {}
       low_stat_minimisation = minimize(func_low_stat, initial_guess, method='Nelder-Mead', tol=1.0, options={'xatol': 0.001, 'fatol': 1.0, 'initial_simplex': initial_simplex})
       if "pdfs" in self.models.keys():
         for k in self.models["pdfs"].keys():
@@ -730,3 +848,203 @@ class Likelihood():
 
       minimisation = minimize(func, low_stat_minimisation.x, method='Nelder-Mead', tol=0.1, options={'xatol': 0.001, 'fatol': 0.1, 'initial_simplex': initial_simplex})
       return minimisation.x, minimisation.fun
+  
+
+  def derivative2(self, Func, X, Y, wts, i, j, epsilon=1e-2):
+    """
+    Calculate the second derivative of the likelihood function numerically.
+
+    Args:
+        Func (callable): The likelihood function for which the second derivative is to be computed.
+        X (array): The independent variables.
+        Y (array): The model parameters.
+        wts (array): The weights for the data points.
+        i, j (int): The index of the components wrt which the derivative is taken.
+        epsilon (float): The perturbation value used for the finite difference approximation.
+
+    Returns:
+        float: The approximate 2nd derivative of the likelihood function wrt the i-th, j-th components.
+    """
+    n = len(Y)
+    if i == j:
+      # entries along the diagonals
+      Yi_plus = np.array(Y)
+      Yi_minus = np.array(Y)
+      Yi_plus[i] += epsilon
+      Yi_minus[i] -= epsilon
+      fi_plus = Func(X, Yi_plus, wts)
+      fi_minus = Func(X, Yi_minus, wts)
+      fi = Func(X, Y, wts)
+
+      return (fi_plus - 2 * fi + fi_minus) / (epsilon**2)
+    
+    else: 
+      # mixed partial derivative case
+      # ++, -- cases
+      Yij_plus = np.array(Y)
+      Yij_plus[i] += epsilon
+      Yij_plus[j] += epsilon
+      Yij_minus = np.array(Y)
+      Yij_minus[i] -= epsilon
+      Yij_minus[j] -= epsilon
+      # +-, -+ cases
+      Yij_plus_minus = np.array(Y)
+      Yij_plus_minus[i] += epsilon
+      Yij_plus_minus[j] -= epsilon
+      Yij_minus_plus = np.array(Y)
+      Yij_minus_plus[i] -= epsilon
+      Yij_plus_minus[j] += epsilon
+      fij_plus = Func(X, Yij_plus, wts)
+      fij_minus = Func(X, Yij_minus, wts)
+      fij_plus_minus = Func(X, Yij_plus_minus, wts)
+      fij_minus_plus = Func(X, Yij_minus_plus, wts)
+
+      return (fij_plus - fij_plus_minus - fij_minus_plus + fij_minus) / (2 * epsilon)**2
+
+  def neg_Run(self, *args, **kwargs):
+    
+    res = self.Run(*args, **kwargs)
+    return -1 * res
+
+  def Hessian(self, X, wts, epsilon=1e-3, repetition=20):
+    """
+    Calculate the Hessian matrix of the likelihood at the entry (i, j).
+
+    Args:
+        Func (callable): The likelihood function for which the second derivative is to be computed.
+        X (array): The independent variables.
+        Y (array): The model parameters.
+        wts (array): The weights for the data points.
+        epsilon (float): The perturbation value used for the finite difference approximation.
+        repetitiaon (int): The number of repetitions for derivative calculation to improve the accuracy.
+
+    Returns: 
+        np.ndarry: The Hessian matrix, a symmetric matrix.
+    """
+
+    Y = copy.deepcopy(self.best_fit)
+    n = len(Y)
+    H = np.zeros((n, n))
+
+    # rescale the weights
+    wt = copy.deepcopy(wts)
+    wts = wt * (np.sum(wt)/np.sum(wts**2))
+    
+    Func = partial(self.neg_Run, return_ln=True, before_sum=True, verbose=False, single_event=True)
+
+    epsilon = float(epsilon)
+    epsilons = epsilon * np.linspace(-5, 5, repetition) # vary the epsilon for smoothing
+
+    for i in range(n):
+      for j in range(i, n):
+
+        derivatives = np.array([self.derivative2(Func, X, Y, wts, i, j, eps) for eps in epsilons])
+        _, intercept = np.polyfit(epsilons, derivatives, 1)
+
+        H[i, j] = np.sum(wts.flatten() * intercept, dtype=np.float32)
+        if i != j:
+          H[j, i] = H[i, j]
+          
+    return H
+
+  def derivative1(self, Func, X, Y, wts, i, epsilon=1e-3):
+    """
+    Calculate the numerical first derivative of a negative log-likelihood function wrt the i-th parameter.
+
+    Args:
+        Func (callable): The likelihood function for which the second derivative is to be computed.
+        X (array): The independent variables.
+        Y (array): The model parameters.
+        wts (array): The weights for the data points.
+        i (int): The index of the parameter to derive wrt.
+        epsilon (float): The perturbation value used for the finite difference approximation.
+
+    Returns:
+        float: The numerical derivative of the function at the i-th parameter.
+    """
+    Yi_plus = np.array(Y, copy=True)
+    Yi_minus = np.array(Y, copy=True)
+    Yi_plus[i] += epsilon
+    Yi_minus[i] -= epsilon
+    fi_plus = np.array(Func(X, Yi_plus, wts))
+    fi_minus = np.array(Func(X, Yi_minus, wts))
+    
+    return (fi_plus - fi_minus) / (2 * epsilon)
+  
+  def D_matrix(self, X, wts, epsilon=1e-3, repetition= 10):
+    """
+    Compute the D matrix representing the first order derivatives of the NLL function.
+
+    Args:
+        X (array): The independent variables.
+        wts (array): The weights for the data points.
+
+    Returns:
+        np.ndarray: The D matrix representing the first-order derivatives squares * wts ** 2.
+    """
+    Y = copy.deepcopy(self.best_fit)
+    n = len(Y)
+    D = np.zeros((n, n))
+
+    wt = copy.deepcopy(wts)
+    wts = wt * (np.sum(wt)/np.sum(wts**2))
+
+    Func = partial(self.neg_Run, return_ln=True, before_sum=True, verbose=False, single_event=True)
+    epsilons = epsilon * np.linspace(-5, 5, repetition)
+
+    for i in range(n):
+      for j in range(n):
+        
+        derivative_i = np.array([self.derivative1(Func, X, Y, wts, i, eps) for eps in epsilons])
+        _, intercept1 = np.polyfit(epsilons, derivative_i, 1)
+
+        if i == j:
+          derivative_j = derivative_i
+          intercept2 = intercept1
+        else:
+          derivative_j = np.array([self.derivative1(Func, X, Y, wts, j, eps) for eps in epsilons])
+          _, intercept2 = np.polyfit(epsilons, derivative_j, 1)
+      
+        derivative = np.sum(np.array(wts.flatten() **2) * intercept1 * intercept2, dtype=np.float32)
+        
+        D[i, j] = derivative
+        if i != j:
+          D[i, j] = D[j, i]
+
+    return D
+  
+  def Covariance(self):
+    """
+    Calculate the covariance matrix as an approximation using the inverse of the Hessian matrix.
+
+    Returns: 
+        np.ndarray: The covariance matrix.
+    """
+    H = copy.deepcopy(self.Hessian)
+    H_arr = np.array(H)
+
+    if len(H) == 1:
+      H_inv = 1 / H_arr
+      return H_inv
+    else:
+      return np.linalg.inv(H)
+    
+  def Covariance_D(self):
+    H = copy.deepcopy(self.Hessian)
+    D = copy.deepcopy(self.D_matrix)
+    H_arr = np.array(H)
+    D_arr = np.array(D)
+
+    if len(H) == 1:
+      return D_arr / (H_arr ** 2)
+    else: 
+      return D @ np.linalg.inv(H) @ np.linalg.inv(H)
+  
+  def Uncertianties(self):
+    C = np.array(copy.deepcopy(self.Covariance))
+    CD = np.array(copy.deepcopy(self.Covariance_D))
+    if len(C) == 1 :
+      return np.sqrt(C), np.sqrt(CD)
+    else:
+      return np.diag(np.sqrt(C)), np.diag(np.sqrt(CD))
+

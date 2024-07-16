@@ -14,19 +14,19 @@ import pyfiglet as pyg
 def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument('-c','--cfg', help= 'Config for running',  default=None)
-  parser.add_argument('--benchmark', help= 'Run from benchmark scenario',  default=None, choices=["Gaussian","GaussianWithExpBkg","GaussianWithExpBkgVaryingYield","2D","5D","5D+D","12D"])
+  parser.add_argument('--benchmark', help= 'Run from benchmark scenario',  default=None, choices=["Gaussian","GaussianWithExpBkg","GaussianWithExpBkgVaryingYield","2D","5D","5D+D","12D", "5D+3D"])
   parser.add_argument('--architecture', help= 'Config for running',  default="configs/architecture/default.yaml")
   parser.add_argument('--submit', help= 'Batch to submit to', type=str, default=None)
   parser.add_argument('--resubmit-scans', help= 'Resubmit any scan jobs that failed.',  action='store_true')
   parser.add_argument('--step', help= 'Step to run', type=str, default=None, choices=["MakeBenchmark","PreProcess","Train","ValidateGeneration","ValidateInference","Infer"])
   parser.add_argument('--specific-file', help= 'Run for a specific file_name', type=str, default=None)
   parser.add_argument('--specific-val-ind', help= 'Run for a specific indices when doing validation', type=str, default=None)
-  parser.add_argument('--specific-scan-ind', help= 'Run for a specific indices when doing scans', type=str, default=None)
+  parser.add_argument('--specific-scan-ind', help= 'Run for a specific isns', type=str, default=None)
   parser.add_argument('--hyperscan-ind', help= 'Add relevant indices on the end of the hyperparameters scan', type=str, default=None)
   parser.add_argument('--scan-points-per-job', help= 'Number of scan points in a single job', type=int, default=100)
   parser.add_argument('--disable-tqdm', help= 'Disable tqdm print out when training.',  action='store_true')
   parser.add_argument('--sge-queue', help= 'Queue for SGE submission', type=str, default="hep.q")
-  parser.add_argument('--sub-step', help= 'Sub-step to run for ValidateInference or Infer steps', type=str, default="InitialFit", choices=["InitialFit","Scan","Collect","Plot","Summary","All","Debug"])
+  parser.add_argument('--sub-step', help= 'Sub-step to run for ValidateInference or Infer steps', type=str, default="InitialFit", choices=["InitialFit","Scan","Collect","Plot","Summary","All","Debug", "Hessian", "D_matrix", "Covariance", "Covariance_D", "Uncertainties"])
   parser.add_argument('--lower-validation-stats', help= 'Lowers the validation stats, so code will run faster.', type=int, default=None)
   parser.add_argument('--do-binned-fit', help= 'Do an extended binned fit instead of an extended unbinned fit.',  action='store_true')
   parser.add_argument('--use-wandb', help='Use wandb for logging.', action='store_true')
@@ -378,7 +378,7 @@ def main(args, architecture=None):
             # Get scan ranges
             for col in info["columns"]:
               val.GetAndDumpScanRanges(info["row"], col, ind=ind, columns=info["columns"])
-
+          
           if args.sub_step in ["Scan","All"]:
 
             print("- Running scans")
@@ -428,6 +428,96 @@ def main(args, architecture=None):
                     sub.Run()
                   job_ind += 1
 
+          if args.sub_step in ["Hessian","All"]:
+
+            print("- Getting Hessian matrix")
+            # load best_fit values
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/best_fit_{ind}.yaml", 'r') as yaml_file:
+              best_fit_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.best_fit = np.array(best_fit_info["best_fit"])  
+            
+            # Get the Hessian matrix
+            val.GetAndDumpHessian(info["row"], ind=ind)
+
+          if args.sub_step in ["D_matrix","All"]:
+
+            print("- Getting D matrix")
+            # load best_fit values
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/best_fit_{ind}.yaml", 'r') as yaml_file:
+              best_fit_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.best_fit = np.array(best_fit_info["best_fit"])  
+            
+            # Get the Hessian matrix
+            val.GetAndDumpD_matrix(info["row"], ind=ind)
+
+          if args.sub_step in ["Covariance", "All"]:
+            
+            print("- Getting Covariance matrix")
+            # load best_fit values
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/best_fit_{ind}.yaml", 'r') as yaml_file:
+              best_fit_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.best_fit = np.array(best_fit_info["best_fit"])  
+            
+            # load the hessian matrix
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/Hessian_matrix_{ind}.yaml", 'r') as yaml_file:
+              H_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.Hessian = H_info["Hessian_matrix"]
+            
+            # get the Covariance matrix
+            val.GetAndDumpCovariance(ind=ind)
+          
+          if args.sub_step in ["Covariance_D", "All"]:
+            
+            print("- Getting Covariance matrix with D matrix")
+            # load best_fit values
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/best_fit_{ind}.yaml", 'r') as yaml_file:
+              best_fit_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.best_fit = np.array(best_fit_info["best_fit"])  
+            
+            # load the hessian matrix
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/Hessian_matrix_{ind}.yaml", 'r') as yaml_file:
+              H_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.Hessian = H_info["Hessian_matrix"]
+
+            # load the D matrix
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/D_matrix_{ind}.yaml", 'r') as yaml_file:
+              D_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.D_matrix = D_info["D_matrix"]
+            
+            # get the Covariance matrix
+            val.GetAndDumpCovariance_D(ind=ind)
+
+          if args.sub_step in ["Uncertainties", "All"]:
+            
+            print("- Getting the uncertainties")
+            # load best_fit values
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/best_fit_{ind}.yaml", 'r') as yaml_file:
+              best_fit_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.best_fit = np.array(best_fit_info["best_fit"])  
+            
+            # load the covariance matrix
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/Covariance_matrix_{ind}.yaml", 'r') as yaml_file:
+              C_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.Covariance = C_info["Covariance_matrix"]
+            
+            # load the covariance matrix with D matrix
+            with open(f"data/{cfg['name']}/{file_name}/{args.step}/Covariance_matrix_with_Dmatrix_{ind}.yaml", 'r') as yaml_file:
+              CD_info = yaml.load(yaml_file, Loader=yaml.FullLoader)
+            if args.submit is None:
+              val.lkld.Covariance_D = CD_info["Covariance_matrix_with_Dmatrix"]
+            
+            # get the Uncertainties
+            val.GetAndDumpUnceritainties(ind=ind)
+            
           if args.sub_step in ["Collect","All"]:
 
             print("- Collecting scans")
@@ -446,7 +536,8 @@ def main(args, architecture=None):
                   scan_results["row"] = scan_results_info["row"]
                   scan_results["columns"] = scan_results_info["columns"]
                   scan_results["varied_column"] = scan_results_info["varied_column"]
-                if None in scan_results_info["nlls"]: continue
+                if scan_results_info is not None and None in scan_results_info["nlls"]: continue
+                #if None in scan_results_info["nlls"]: continue
                 scan_results["scan_values"] += scan_results_info["scan_values"]
                 scan_results["nlls"] += scan_results_info["nlls"]
 
